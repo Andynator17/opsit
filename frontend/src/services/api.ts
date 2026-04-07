@@ -1,7 +1,9 @@
 import axios from 'axios';
 import type { AxiosError, InternalAxiosRequestConfig } from 'axios';
 
-// API Base URL - can be configured via environment variable
+// API Base URL - can be configured via environment variable.
+// In production behind Traefik (path-routing), this is set to "/api/v1"
+// at build time so the SPA calls its own origin and CORS doesn't apply.
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
 
 // Create axios instance

@@ -4,9 +4,10 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 
-# Vite reads VITE_* vars at build time
-ARG VITE_API_BASE_URL
-ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
+# Vite reads VITE_* vars at build time.
+# VITE_API_URL must match what frontend/src/services/api.ts reads.
+ARG VITE_API_URL
+ENV VITE_API_URL=${VITE_API_URL}
 
 COPY package*.json ./
 RUN npm ci

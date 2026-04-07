@@ -1,29 +1,35 @@
 name: opsit
 
 # ---------------------------------------------------------------------
-# OpsIT runs as a sidecar stack alongside an EXISTING Traefik + n8n
-# setup on the same VPS.
+# OpsIT - sidecar stack for an existing Traefik + n8n setup on hitex.at.
 #
-# Existing containers expected on the host:
-#   - traefik-nhwc   (reverse proxy, owns ports 80/443)
-#   - n8n-irio       (n8n)
+# Existing on the host:
+#   - traefik-nhwc      (reverse proxy, network_mode: host, ports 80/443)
+#   - n8n-irio          (n8n; routed via Traefik on n8n.hitex.at)
+#   - postgresql-cjc4   (separate Postgres instance, NOT used by OpsIT)
 #
-# Requirements:
-#   1. An external Docker network that traefik-nhwc is attached to.
-#      Default name below: `traefik`. If yours differs (e.g. `proxy`,
-#      `web`, `traefik_net`), change it ONCE in the `networks:` block
-#      at the bottom of this file.
-#   2. Traefik must be configured with an HTTPS entrypoint and a
-#      certresolver. The defaults below assume entrypoint `websecure`
-#      and certresolver `letsencrypt`. If yours are named differently,
-#      override via env vars TRAEFIK_ENTRYPOINT / TRAEFIK_CERTRESOLVER
-#      in your `.env` file.
+# Routing layout (Variant A: single subdomain, path-based):
+#   https://opsit-dev.hitex.at/         -> opsit-frontend (SPA, nginx)
+#   https://opsit-dev.hitex.at/api/...  -> opsit-backend  (FastAPI)
 #
-# Nothing in this stack publishes host ports — Traefik routes in.
+# CORS-free: frontend and API share an origin.
+#
+# Network model
+# -------------
+# Traefik runs in `network_mode: host`, so it is NOT attached to any
+# docker bridge network. It discovers containers via the docker socket
+# and reaches them via their bridge-network IP (which is routable from
+# the host namespace). The label
+#     traefik.docker.network=opsit_web
+# tells Traefik which of a container's networks to use for the
+# upstream connection.
+#
+# `opsit_web` is created and managed by THIS compose file — no
+# pre-creation needed.
 # ---------------------------------------------------------------------
 
 services:
-  # ---------- PostgreSQL (OpsIT-only instance) ----------
+  # ---------- PostgreSQL (OpsIT-only instance, not exposed) ----------
   postgres:
     image: postgres:16-alpine
     container_name: opsit-postgres
@@ -64,15 +70,17 @@ services:
     volumes:
       - backend_uploads:/app/uploads
     networks:
-      - opsit_internal   # talks to postgres
-      - traefik          # exposed via Traefik (also reachable by n8n-irio)
+      - opsit_internal   # talks to its own postgres
+      - opsit_web        # discovered by host-mode Traefik
     labels:
       - "traefik.enable=true"
-      - "traefik.docker.network=${TRAEFIK_NETWORK:-traefik}"
-      - "traefik.http.routers.opsit-backend.rule=Host(`${DOMAIN_API}`)"
-      - "traefik.http.routers.opsit-backend.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.docker.network=opsit_web"
+      # Router: same host as frontend, but only paths starting with /api
+      - "traefik.http.routers.opsit-backend.rule=Host(`${DOMAIN_OPSIT}`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.opsit-backend.entrypoints=websecure"
       - "traefik.http.routers.opsit-backend.tls=true"
-      - "traefik.http.routers.opsit-backend.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.opsit-backend.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.opsit-backend.priority=100"
       - "traefik.http.services.opsit-backend.loadbalancer.server.port=8000"
       # 25 MB upload limit (matches MAX_FILE_SIZE_MB in backend)
       - "traefik.http.middlewares.opsit-backend-bodylimit.buffering.maxRequestBodyBytes=26214400"
@@ -83,49 +91,35 @@ services:
     build:
       context: ./frontend
       args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL}
+        # Relative URL: SPA calls its own origin -> Traefik routes /api/* to backend
+        VITE_API_URL: ${VITE_API_URL:-/api/v1}
     container_name: opsit-frontend
     restart: unless-stopped
     networks:
-      - traefik
+      - opsit_web
     labels:
       - "traefik.enable=true"
-      - "traefik.docker.network=${TRAEFIK_NETWORK:-traefik}"
-      - "traefik.http.routers.opsit-frontend.rule=Host(`${DOMAIN_APP}`)"
-      - "traefik.http.routers.opsit-frontend.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.docker.network=opsit_web"
+      # Router: catches everything else on the host (lower priority than backend)
+      - "traefik.http.routers.opsit-frontend.rule=Host(`${DOMAIN_OPSIT}`)"
+      - "traefik.http.routers.opsit-frontend.entrypoints=websecure"
       - "traefik.http.routers.opsit-frontend.tls=true"
-      - "traefik.http.routers.opsit-frontend.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.opsit-frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.opsit-frontend.priority=10"
       - "traefik.http.services.opsit-frontend.loadbalancer.server.port=80"
 
-  # ---------- Marketing Landing Page ----------
-  landingpage:
-    build:
-      context: ./landingpage
-    container_name: opsit-landing
-    restart: unless-stopped
-    networks:
-      - traefik
-    labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=${TRAEFIK_NETWORK:-traefik}"
-      - "traefik.http.routers.opsit-landing.rule=Host(`${DOMAIN_LANDING}`)"
-      - "traefik.http.routers.opsit-landing.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
-      - "traefik.http.routers.opsit-landing.tls=true"
-      - "traefik.http.routers.opsit-landing.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
-      - "traefik.http.services.opsit-landing.loadbalancer.server.port=80"
-
 networks:
-  # Private network for OpsIT <-> its own Postgres
+  # Private: OpsIT backend <-> its own postgres only
   opsit_internal:
     driver: bridge
 
-  # External network shared with traefik-nhwc (and optionally n8n-irio).
-  # Created OUTSIDE this compose file. If your network is named
-  # differently, change BOTH the key (above, in services.*.networks)
-  # AND `name:` below.
-  traefik:
-    external: true
-    name: traefik
+  # Bridge that the host-mode Traefik reaches into to find OpsIT
+  # frontend + backend. n8n-irio can later be attached to this same
+  # network with `docker network connect opsit_web n8n-irio` so n8n
+  # workflows can call http://opsit-backend:8000 directly.
+  opsit_web:
+    driver: bridge
+    name: opsit_web
 
 volumes:
   postgres_data:
