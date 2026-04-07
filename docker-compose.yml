@@ -1,0 +1,132 @@
+name: opsit
+
+# ---------------------------------------------------------------------
+# OpsIT runs as a sidecar stack alongside an EXISTING Traefik + n8n
+# setup on the same VPS.
+#
+# Existing containers expected on the host:
+#   - traefik-nhwc   (reverse proxy, owns ports 80/443)
+#   - n8n-irio       (n8n)
+#
+# Requirements:
+#   1. An external Docker network that traefik-nhwc is attached to.
+#      Default name below: `traefik`. If yours differs (e.g. `proxy`,
+#      `web`, `traefik_net`), change it ONCE in the `networks:` block
+#      at the bottom of this file.
+#   2. Traefik must be configured with an HTTPS entrypoint and a
+#      certresolver. The defaults below assume entrypoint `websecure`
+#      and certresolver `letsencrypt`. If yours are named differently,
+#      override via env vars TRAEFIK_ENTRYPOINT / TRAEFIK_CERTRESOLVER
+#      in your `.env` file.
+#
+# Nothing in this stack publishes host ports — Traefik routes in.
+# ---------------------------------------------------------------------
+
+services:
+  # ---------- PostgreSQL (OpsIT-only instance) ----------
+  postgres:
+    image: postgres:16-alpine
+    container_name: opsit-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - opsit_internal
+
+  # ---------- OpsIT Backend (FastAPI) ----------
+  backend:
+    build:
+      context: ./backend
+    container_name: opsit-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      SECRET_KEY: ${SECRET_KEY}
+      DEBUG: ${DEBUG}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS}
+      BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS}
+      FIRST_ADMIN_EMAIL: ${FIRST_ADMIN_EMAIL}
+      FIRST_ADMIN_PASSWORD: ${FIRST_ADMIN_PASSWORD}
+      UPLOAD_DIR: /app/uploads
+    volumes:
+      - backend_uploads:/app/uploads
+    networks:
+      - opsit_internal   # talks to postgres
+      - traefik          # exposed via Traefik (also reachable by n8n-irio)
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-traefik}"
+      - "traefik.http.routers.opsit-backend.rule=Host(`${DOMAIN_API}`)"
+      - "traefik.http.routers.opsit-backend.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.opsit-backend.tls=true"
+      - "traefik.http.routers.opsit-backend.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.services.opsit-backend.loadbalancer.server.port=8000"
+      # 25 MB upload limit (matches MAX_FILE_SIZE_MB in backend)
+      - "traefik.http.middlewares.opsit-backend-bodylimit.buffering.maxRequestBodyBytes=26214400"
+      - "traefik.http.routers.opsit-backend.middlewares=opsit-backend-bodylimit@docker"
+
+  # ---------- OpsIT Frontend (Vite SPA via nginx) ----------
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL}
+    container_name: opsit-frontend
+    restart: unless-stopped
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-traefik}"
+      - "traefik.http.routers.opsit-frontend.rule=Host(`${DOMAIN_APP}`)"
+      - "traefik.http.routers.opsit-frontend.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.opsit-frontend.tls=true"
+      - "traefik.http.routers.opsit-frontend.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.services.opsit-frontend.loadbalancer.server.port=80"
+
+  # ---------- Marketing Landing Page ----------
+  landingpage:
+    build:
+      context: ./landingpage
+    container_name: opsit-landing
+    restart: unless-stopped
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-traefik}"
+      - "traefik.http.routers.opsit-landing.rule=Host(`${DOMAIN_LANDING}`)"
+      - "traefik.http.routers.opsit-landing.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+      - "traefik.http.routers.opsit-landing.tls=true"
+      - "traefik.http.routers.opsit-landing.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.services.opsit-landing.loadbalancer.server.port=80"
+
+networks:
+  # Private network for OpsIT <-> its own Postgres
+  opsit_internal:
+    driver: bridge
+
+  # External network shared with traefik-nhwc (and optionally n8n-irio).
+  # Created OUTSIDE this compose file. If your network is named
+  # differently, change BOTH the key (above, in services.*.networks)
+  # AND `name:` below.
+  traefik:
+    external: true
+    name: traefik
+
+volumes:
+  postgres_data:
+  backend_uploads:

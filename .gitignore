@@ -1,0 +1,55 @@
+# ---- Secrets / local env ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+temp_token.txt
+token_response.json
+login.json
+login_test.json
+
+# ---- Python / backend ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+backend/uploads/
+backend/*.db
+backend/*.sqlite
+backend/openapi_check.json
+
+# ---- Node / frontend ----
+node_modules/
+dist/
+build/
+.vite/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ---- IDE / OS ----
+.vscode/
+.idea/
+.claude/settings.local.json
+.DS_Store
+Thumbs.db
+*.swp
+
+# ---- Docker / runtime data ----
+data/
+volumes/
+caddy_data/
+caddy_config/
+postgres_data/
+n8n_data/
+
+# ---- Windows-only dev helpers (optional: remove if you want them tracked) ----
+*.ps1
+*.bat
