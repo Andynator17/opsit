@@ -1,8 +1,9 @@
 """Application configuration"""
 from typing import List
 import json
+from typing_extensions import Annotated
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -24,7 +25,10 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
     # CORS
-    BACKEND_CORS_ORIGINS: List[str] = []
+    # NoDecode prevents pydantic-settings from JSON-decoding the env value
+    # before our parse_cors_origins validator runs. Without it, an empty
+    # string crashes with JSONDecodeError instead of becoming an empty list.
+    BACKEND_CORS_ORIGINS: Annotated[List[str], NoDecode] = []
 
     # File Upload
     UPLOAD_DIR: str = "./uploads"
@@ -40,6 +44,9 @@ class Settings(BaseSettings):
     def parse_cors_origins(cls, v):
         """Parse CORS origins from string or list"""
         if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return []
             try:
                 # Try to parse as JSON
                 parsed = json.loads(v)
