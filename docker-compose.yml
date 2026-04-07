@@ -74,7 +74,7 @@ services:
       - opsit_web        # discovered by host-mode Traefik
     labels:
       - "traefik.enable=true"
-      - "traefik.docker.network=opsit_web"
+      - "traefik.docker.network=${COMPOSE_PROJECT_NAME:-opsit}_opsit_web"
       # Router: same host as frontend, but only paths starting with /api
       - "traefik.http.routers.opsit-backend.rule=Host(`${DOMAIN_OPSIT}`) && PathPrefix(`/api`)"
       - "traefik.http.routers.opsit-backend.entrypoints=websecure"
@@ -99,7 +99,7 @@ services:
       - opsit_web
     labels:
       - "traefik.enable=true"
-      - "traefik.docker.network=opsit_web"
+      - "traefik.docker.network=${COMPOSE_PROJECT_NAME:-opsit}_opsit_web"
       # Router: catches everything else on the host (lower priority than backend)
       - "traefik.http.routers.opsit-frontend.rule=Host(`${DOMAIN_OPSIT}`)"
       - "traefik.http.routers.opsit-frontend.entrypoints=websecure"
@@ -114,12 +114,13 @@ networks:
     driver: bridge
 
   # Bridge that the host-mode Traefik reaches into to find OpsIT
-  # frontend + backend. n8n-irio can later be attached to this same
-  # network with `docker network connect opsit_web n8n-irio` so n8n
-  # workflows can call http://opsit-backend:8000 directly.
+  # frontend + backend. Compose names this network using the standard
+  # convention <project>_opsit_web (e.g. opsit-dev_opsit_web). To later
+  # let n8n call OpsIT internally, attach it with:
+  #     docker network connect opsit-dev_opsit_web n8n-irio
+  # (Use `docker network ls | grep opsit` to confirm the exact name.)
   opsit_web:
     driver: bridge
-    name: opsit_web
 
 volumes:
   postgres_data:
