@@ -1,9 +1,7 @@
 """Application configuration"""
 from typing import List
 import json
-from typing_extensions import Annotated
-from pydantic import field_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -25,10 +23,12 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
     # CORS
-    # NoDecode prevents pydantic-settings from JSON-decoding the env value
-    # before our parse_cors_origins validator runs. Without it, an empty
-    # string crashes with JSONDecodeError instead of becoming an empty list.
-    BACKEND_CORS_ORIGINS: Annotated[List[str], NoDecode] = []
+    # Stored as a raw string and parsed lazily. We don't type this as
+    # List[str] because pydantic-settings v2 tries to JSON-decode such
+    # env values BEFORE field validators run, which crashes on empty
+    # strings. Use the `cors_origins` property below to get the parsed
+    # list.
+    BACKEND_CORS_ORIGINS: str = ""
 
     # File Upload
     UPLOAD_DIR: str = "./uploads"
@@ -39,31 +39,30 @@ class Settings(BaseSettings):
     FIRST_ADMIN_EMAIL: str = "admin@opsit.local"
     FIRST_ADMIN_PASSWORD: str = "Admin123!"
 
-    @field_validator("BACKEND_CORS_ORIGINS", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, v):
-        """Parse CORS origins from string or list"""
-        if isinstance(v, str):
-            v = v.strip()
-            if not v:
-                return []
-            try:
-                # Try to parse as JSON
-                parsed = json.loads(v)
-                if isinstance(parsed, list):
-                    return parsed
-                return [parsed] if parsed else []
-            except json.JSONDecodeError:
-                # If not JSON, split by comma
-                return [origin.strip() for origin in v.split(",") if origin.strip()]
-        elif isinstance(v, list):
-            return v
-        return []
+    @property
+    def cors_origins(self) -> List[str]:
+        """Parse BACKEND_CORS_ORIGINS into a list of origins.
+
+        Accepts:
+          - empty string  -> []
+          - JSON array    -> ["https://a", "https://b"]
+          - comma list    -> "https://a,https://b"
+        """
+        v = (self.BACKEND_CORS_ORIGINS or "").strip()
+        if not v:
+            return []
+        try:
+            parsed = json.loads(v)
+            if isinstance(parsed, list):
+                return [str(x) for x in parsed]
+            return [str(parsed)]
+        except json.JSONDecodeError:
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
 
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=True,
-        extra="ignore"
+        extra="ignore",
     )
 
 

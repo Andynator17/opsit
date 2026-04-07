@@ -19,7 +19,7 @@ app = FastAPI(
 )
 
 # CORS middleware - use settings with dev fallback
-cors_origins = settings.BACKEND_CORS_ORIGINS or [
+cors_origins = settings.cors_origins or [
     "http://localhost:5173",
     "http://localhost:5174",
     "http://localhost:3000",
